@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>WebSocket 채팅 클라이언트</title>
+  <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/stompjs@2.3.3/lib/stomp.min.js"></script>
+</head>
+<body>
+  <h2>📡 WebSocket 채팅 클라이언트</h2>
+
+  <label>Access Token:</label><br />
+  <input type="text" id="accessToken" size="80"/><br /><br />
+
+  <label>Refresh Token:</label><br />
+  <input type="text" id="refreshToken" size="80"/><br /><br />
+
+  <label>Group Name:</label><br />
+  <input type="text" id="groupName" /><br /><br />
+
+  <button onclick="connectAndSubscribe()">🔌 Connect & Subscribe</button>
+
+  <hr />
+  <h3>💬 메시지 전송</h3>
+
+  <input type="text" id="messageInput" placeholder="메시지를 입력하세요" size="60"/>
+  <button onclick="sendTextMessage()">📤 전송</button>
+
+  <br/><br/>
+  <input type="file" id="imageInput"/>
+  <button onclick="uploadImage()">🖼️ 이미지 업로드</button>
+
+  <div id="image-preview"></div>
+
+  <hr />
+  <h3>📥 수신 메시지</h3>
+  <div id="messages"></div>
+
+  <script>
+    let stompClient = null;
+    let groupName = null;
+
+    function connectAndSubscribe() {
+      const accessToken = document.getElementById("accessToken").value;
+      const refreshToken = document.getElementById("refreshToken").value;
+      groupName = document.getElementById("groupName").value;
+
+      const queryString = `?accessToken=${encodeURIComponent(accessToken)}&refreshToken=${encodeURIComponent(refreshToken)}&groupName=${encodeURIComponent(groupName)}`;
+      const socket = new SockJS("https://localhost:8080/ws" + queryString);
+      stompClient = Stomp.over(socket);
+      stompClient.debug = null;
+
+      stompClient.connect({}, function (frame) {
+        console.log("✅ Connected: " + frame);
+        console.log("📡 WebSocket 세션 연결됨, 바로 subscribe 시도 중");
+        stompClient.subscribe("/sub/chat/" + groupName, function (message) {
+          const msg = JSON.parse(message.body);
+          renderMessage(msg);
+        });
+      }, function (error) {
+        alert("❌ WebSocket 연결 실패: " + error);
+        console.error(error);
+      });
+    }
+
+    function sendTextMessage() {
+      const message = document.getElementById("messageInput").value;
+      stompClient.send(`/pub/chat/${groupName}`, {}, JSON.stringify({
+        content: message,
+        type: "TEXT"
+      }));
+      document.getElementById("messageInput").value = "";
+    }
+
+    function uploadImage() {
+      const fileInput = document.getElementById("imageInput");
+      const file = fileInput.files[0];
+      const accessToken = document.getElementById("accessToken").value;
+      const refreshToken = document.getElementById("refreshToken").value;
+      const groupName = document.getElementById("groupName").value;
+
+      if (!file) {
+        alert("이미지를 선택해주세요.");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("image", file);
+      formData.append("groupName", groupName); // ✅ 쿼리 대신 formData로 전송
+
+      fetch("https://localhost:8080/chat/image/upload", {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + accessToken,
+          "Refresh-Token": refreshToken
+          // ❌ Content-Type 생략 (브라우저가 자동 설정함)
+        },
+        body: formData
+      })
+      .then(response => {
+        if (!response.ok) {
+          throw new Error("서버 응답 오류");
+        }
+        return response.json();
+      })
+      .then(data => {
+        const imageUrl = data.data;
+        showImagePreview(imageUrl);
+      })
+      .catch(error => {
+        console.error("이미지 업로드 실패:", error);
+        alert("이미지 업로드 중 문제가 발생했습니다.");
+      });
+    }
+
+    function showImagePreview(url) {
+      const previewArea = document.getElementById("image-preview");
+      previewArea.innerHTML = `
+        <p>📸 미리보기</p>
+        <img src="${url}" width="200" /><br/>
+        <button id="sendImageButton" data-url="${url}">📤 이미지 전송</button>
+      `;
+
+      const sendButton = document.getElementById("sendImageButton");
+      sendButton.addEventListener("click", function() {
+        const imageUrl = this.getAttribute("data-url");
+        sendImage(imageUrl);
+      })
+    }
+
+    function sendImage(imageUrl) {
+      stompClient.send(`/pub/chat/${groupName}`, {}, JSON.stringify({
+        content: imageUrl,
+        type: "IMAGE"
+      }));
+      document.getElementById("image-preview").innerHTML = "";
+    }
+
+    function renderMessage(msg) {
+      const msgArea = document.getElementById("messages");
+      if (msg.type === "TEXT") {
+        msgArea.innerHTML += `<p><strong>${msg.senderIdentifier}</strong>: ${msg.content}</p>`;
+      } else if (msg.type === "IMAGE") {
+        msgArea.innerHTML += `<p><strong>${msg.senderIdentifier}</strong>:<br/><img src="${msg.content}" width="200"/></p>`;
+      }
+    }
+  </script>
+</body>
+</html>
